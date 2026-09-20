@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Project cache
+.cache/
+
+# Experiment results
+outputs/
+
+# External repositories
+third_party/
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Temporary
+*.tmp
