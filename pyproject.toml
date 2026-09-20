@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audio-deepfake-detection"
+version = "0.1.0"
+description = "LODO evaluation of SOTA audio deepfake detectors and modular LACF."
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
