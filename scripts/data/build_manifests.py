@@ -8,6 +8,9 @@ from pathlib import Path
 from audio_deepfake_detection.data.asvspoof2019 import (
     build_split_manifest as build_asv19_split,
 )
+from audio_deepfake_detection.data.asvspoof5 import (
+    build_split_manifest as build_asv5_split,
+)
 
 
 DEFAULT_DATA_ROOT = Path(
@@ -27,10 +30,7 @@ def build_asvspoof2019(
         / "extracted"
     )
 
-    output_dir = (
-        output_root
-        / "asvspoof2019"
-    )
+    output_dir = output_root / "asvspoof2019"
 
     for split in ("train", "dev", "eval"):
         output_path = output_dir / f"{split}.csv"
@@ -47,12 +47,42 @@ def build_asvspoof2019(
         )
 
 
+def build_asvspoof5(
+    data_root: Path,
+    output_root: Path,
+) -> None:
+    extracted_root = (
+        data_root
+        / "asvspoof5"
+        / "extracted"
+    )
+
+    output_dir = output_root / "asvspoof5"
+
+    for split in ("train", "dev", "eval"):
+        output_path = output_dir / f"{split}.csv"
+
+        count = build_asv5_split(
+            extracted_root=extracted_root,
+            split=split,
+            output_path=output_path,
+        )
+
+        print(
+            f"ASVspoof5     {split:5s}: "
+            f"{count:>8,d} rows -> {output_path}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--dataset",
-        choices=["asvspoof2019"],
+        choices=[
+            "asvspoof2019",
+            "asvspoof5",
+        ],
         required=True,
     )
 
@@ -72,8 +102,14 @@ def main() -> None:
 
     if args.dataset == "asvspoof2019":
         build_asvspoof2019(
-            data_root=args.data_root,
-            output_root=args.output_root,
+            args.data_root,
+            args.output_root,
+        )
+
+    elif args.dataset == "asvspoof5":
+        build_asvspoof5(
+            args.data_root,
+            args.output_root,
         )
 
 
