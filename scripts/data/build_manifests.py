@@ -14,6 +14,9 @@ from audio_deepfake_detection.data.asvspoof5 import (
 from audio_deepfake_detection.data.cfad import (
     build_split_manifest as build_cfad_split,
 )
+from audio_deepfake_detection.data.speechfake import (
+    build_split_manifest as build_speechfake_split,
+)
 
 
 DEFAULT_DATA_ROOT = Path(
@@ -109,6 +112,33 @@ def build_cfad(
         )
 
 
+def build_speechfake(
+    data_root: Path,
+    output_root: Path,
+) -> None:
+    extracted_root = (
+        data_root
+        / "speechfake"
+        / "extracted"
+    )
+
+    output_dir = output_root / "speechfake"
+
+    for split in ("train", "dev", "test"):
+        output_path = output_dir / f"{split}.csv"
+
+        count = build_speechfake_split(
+            extracted_root=extracted_root,
+            split=split,
+            output_path=output_path,
+        )
+
+        print(
+            f"SpeechFake    {split:11s}: "
+            f"{count:>8,d} rows -> {output_path}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
 
@@ -118,6 +148,7 @@ def main() -> None:
             "asvspoof2019",
             "asvspoof5",
             "cfad",
+            "speechfake",
         ],
         required=True,
     )
@@ -150,6 +181,12 @@ def main() -> None:
 
     elif args.dataset == "cfad":
         build_cfad(
+            args.data_root,
+            args.output_root,
+        )
+
+    elif args.dataset == "speechfake":
+        build_speechfake(
             args.data_root,
             args.output_root,
         )
