@@ -1,0 +1,34 @@
+fold: F2
+held_out_dataset: cfad
+
+source_train:
+  - dataset: asvspoof2019
+    split: train
+    path: manifests/asvspoof2019/train.csv
+  - dataset: asvspoof5
+    split: train
+    path: manifests/asvspoof5/train.csv
+  - dataset: speechfake
+    split: train
+    path: manifests/speechfake/train.csv
+
+source_dev:
+  - dataset: asvspoof2019
+    split: dev
+    path: manifests/asvspoof2019/dev.csv
+  - dataset: asvspoof5
+    split: dev
+    path: manifests/asvspoof5/dev.csv
+  - dataset: speechfake
+    split: dev
+    path: manifests/speechfake/dev.csv
+
+target_primary:
+  dataset: cfad
+  split: test_unseen
+  path: manifests/cfad/test_unseen.csv
+
+target_secondary:
+  dataset: cfad
+  split: test_seen
+  path: manifests/cfad/test_seen.csv
