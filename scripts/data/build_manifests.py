@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from audio_deepfake_detection.data.asvspoof2019 import (
+    build_split_manifest as build_asv19_split,
+)
+
+
+DEFAULT_DATA_ROOT = Path(
+    "/mnt/salt/datasets/audio-deepfake"
+)
+
+DEFAULT_OUTPUT_ROOT = Path("manifests")
+
+
+def build_asvspoof2019(
+    data_root: Path,
+    output_root: Path,
+) -> None:
+    extracted_root = (
+        data_root
+        / "asvspoof2019"
+        / "extracted"
+    )
+
+    output_dir = (
+        output_root
+        / "asvspoof2019"
+    )
+
+    for split in ("train", "dev", "eval"):
+        output_path = output_dir / f"{split}.csv"
+
+        count = build_asv19_split(
+            extracted_root=extracted_root,
+            split=split,
+            output_path=output_path,
+        )
+
+        print(
+            f"ASVspoof2019 {split:5s}: "
+            f"{count:>8,d} rows -> {output_path}"
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--dataset",
+        choices=["asvspoof2019"],
+        required=True,
+    )
+
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=DEFAULT_DATA_ROOT,
+    )
+
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+    )
+
+    args = parser.parse_args()
+
+    if args.dataset == "asvspoof2019":
+        build_asvspoof2019(
+            data_root=args.data_root,
+            output_root=args.output_root,
+        )
+
+
+if __name__ == "__main__":
+    main()

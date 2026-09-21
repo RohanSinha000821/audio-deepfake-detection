@@ -28,3 +28,7 @@ third_party/
 
 # Python package metadata
 *.egg-info/
+
+# Generated dataset manifests
+manifests/**/*.csv
+manifests/**/*.csv.gz
