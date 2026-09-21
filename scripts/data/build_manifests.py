@@ -11,6 +11,9 @@ from audio_deepfake_detection.data.asvspoof2019 import (
 from audio_deepfake_detection.data.asvspoof5 import (
     build_split_manifest as build_asv5_split,
 )
+from audio_deepfake_detection.data.cfad import (
+    build_split_manifest as build_cfad_split,
+)
 
 
 DEFAULT_DATA_ROOT = Path(
@@ -42,7 +45,7 @@ def build_asvspoof2019(
         )
 
         print(
-            f"ASVspoof2019 {split:5s}: "
+            f"ASVspoof2019 {split:11s}: "
             f"{count:>8,d} rows -> {output_path}"
         )
 
@@ -69,7 +72,39 @@ def build_asvspoof5(
         )
 
         print(
-            f"ASVspoof5     {split:5s}: "
+            f"ASVspoof5     {split:11s}: "
+            f"{count:>8,d} rows -> {output_path}"
+        )
+
+
+def build_cfad(
+    data_root: Path,
+    output_root: Path,
+) -> None:
+    extracted_root = (
+        data_root
+        / "cfad"
+        / "extracted"
+    )
+
+    output_dir = output_root / "cfad"
+
+    for split in (
+        "train",
+        "dev",
+        "test_seen",
+        "test_unseen",
+    ):
+        output_path = output_dir / f"{split}.csv"
+
+        count = build_cfad_split(
+            extracted_root=extracted_root,
+            split=split,
+            output_path=output_path,
+        )
+
+        print(
+            f"CFAD          {split:11s}: "
             f"{count:>8,d} rows -> {output_path}"
         )
 
@@ -82,6 +117,7 @@ def main() -> None:
         choices=[
             "asvspoof2019",
             "asvspoof5",
+            "cfad",
         ],
         required=True,
     )
@@ -108,6 +144,12 @@ def main() -> None:
 
     elif args.dataset == "asvspoof5":
         build_asvspoof5(
+            args.data_root,
+            args.output_root,
+        )
+
+    elif args.dataset == "cfad":
+        build_cfad(
             args.data_root,
             args.output_root,
         )
