@@ -2,6 +2,7 @@ import csv
 
 import numpy as np
 import soundfile as sf
+import torch
 
 from audio_deepfake_detection.data.loaders import (
     create_eval_loader,
@@ -124,3 +125,72 @@ def test_eval_loader_is_sequential(tmp_path):
     )
 
     assert ids == ["0", "1", "2"]
+
+
+def test_train_loader_crops_reproducible_with_no_workers(tmp_path):
+    audio = tmp_path / "long.wav"
+    manifest = tmp_path / "train.csv"
+
+    sf.write(
+        audio,
+        np.linspace(
+            -0.9,
+            0.9,
+            48000,
+            dtype=np.float32,
+        ),
+        16000,
+    )
+
+    write_manifest(
+        manifest,
+        [
+            {
+                "path": str(audio),
+                "label": str(label),
+                "dataset": "source",
+                "split": "train",
+                "utterance_id": f"long_{label}",
+            }
+            for label in (0, 1)
+        ],
+    )
+
+    loader1, _dataset1, sampler1 = create_train_loader(
+        [manifest],
+        batch_size=3,
+        seed=77,
+        max_seconds=0.5,
+        num_workers=0,
+        num_samples=9,
+        pin_memory=False,
+    )
+    loader2, _dataset2, sampler2 = create_train_loader(
+        [manifest],
+        batch_size=3,
+        seed=77,
+        max_seconds=0.5,
+        num_workers=0,
+        num_samples=9,
+        pin_memory=False,
+    )
+
+    sampler1.set_epoch(4)
+    sampler2.set_epoch(4)
+
+    batches1 = list(loader1)
+    batches2 = list(loader2)
+
+    assert [
+        utterance_id
+        for batch in batches1
+        for utterance_id in batch["utterance_id"]
+    ] == [
+        utterance_id
+        for batch in batches2
+        for utterance_id in batch["utterance_id"]
+    ]
+    assert torch.equal(
+        torch.cat([batch["waveform"] for batch in batches1]),
+        torch.cat([batch["waveform"] for batch in batches2]),
+    )

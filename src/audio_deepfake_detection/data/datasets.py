@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+import torch
 from torch.utils.data import Dataset
 
 from .audio import load_audio_segment, resample_audio
@@ -146,8 +147,21 @@ class ManifestDataset(Dataset):
 
     def __getitem__(
         self,
-        index: int,
+        index: int | tuple[int, int],
     ) -> dict:
+
+        crop_seed: int | None = None
+
+        if isinstance(index, tuple):
+            if len(index) != 2:
+                raise ValueError(
+                    "Sampler index tuple must contain "
+                    "(record_index, crop_seed)"
+                )
+
+            index, crop_seed = index
+            index = int(index)
+            crop_seed = int(crop_seed)
 
         record = self.records[index]
 
@@ -162,10 +176,17 @@ class ManifestDataset(Dataset):
         if not self.load_audio:
             return item
 
+        generator = None
+
+        if crop_seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(crop_seed)
+
         waveform, sample_rate = load_audio_segment(
             record.path,
             max_seconds=self.max_seconds,
             random_crop=self.random_crop,
+            generator=generator,
         )
 
         if self.target_sample_rate is not None:

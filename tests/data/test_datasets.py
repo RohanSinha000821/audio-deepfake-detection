@@ -2,6 +2,7 @@ import csv
 
 import numpy as np
 import soundfile as sf
+import torch
 
 from audio_deepfake_detection.data.datasets import (
     ManifestDataset,
@@ -94,3 +95,46 @@ def test_manifest_dataset_loads_audio(tmp_path):
 
     assert item["sample_rate"] == 16000
     assert item["waveform"].shape[0] == 16000
+
+
+def test_sampler_seed_controls_random_crop(tmp_path):
+    audio = tmp_path / "long.wav"
+    manifest = tmp_path / "manifest.csv"
+
+    sf.write(
+        audio,
+        np.linspace(
+            -0.9,
+            0.9,
+            32000,
+            dtype=np.float32,
+        ),
+        8000,
+    )
+
+    write_manifest(
+        manifest,
+        [
+            {
+                "path": str(audio),
+                "label": "1",
+                "dataset": "source",
+                "split": "train",
+                "utterance_id": "long",
+            }
+        ],
+    )
+
+    dataset = ManifestDataset(
+        manifest,
+        load_audio=True,
+        max_seconds=0.5,
+        random_crop=True,
+    )
+
+    first = dataset[(0, 12345)]["waveform"]
+    repeated = dataset[(0, 12345)]["waveform"]
+    different = dataset[(0, 54321)]["waveform"]
+
+    assert torch.equal(first, repeated)
+    assert not torch.equal(first, different)

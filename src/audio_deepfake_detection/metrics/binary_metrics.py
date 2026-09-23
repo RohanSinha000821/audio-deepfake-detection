@@ -8,20 +8,30 @@ def validate_binary_inputs(
     labels,
     scores,
 ) -> tuple[np.ndarray, np.ndarray]:
-    labels = np.asarray(labels)
+    raw_labels = np.asarray(labels)
     scores = np.asarray(scores, dtype=np.float64)
 
-    if labels.ndim != 1 or scores.ndim != 1:
+    if raw_labels.ndim != 1 or scores.ndim != 1:
         raise ValueError(
             "labels and scores must be 1-D arrays"
         )
 
-    if len(labels) != len(scores):
+    try:
+        numeric_labels = np.asarray(
+            labels,
+            dtype=np.float64,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "labels must contain only numeric 0/1 values"
+        ) from exc
+
+    if len(numeric_labels) != len(scores):
         raise ValueError(
             "labels and scores must have the same length"
         )
 
-    if len(labels) == 0:
+    if len(numeric_labels) == 0:
         raise ValueError("inputs must not be empty")
 
     if not np.all(np.isfinite(scores)):
@@ -29,19 +39,26 @@ def validate_binary_inputs(
             "scores must contain only finite values"
         )
 
-    try:
-        labels = labels.astype(np.int64)
-    except (TypeError, ValueError) as exc:
+    if not np.all(np.isfinite(numeric_labels)):
         raise ValueError(
-            "labels must be binary integers"
-        ) from exc
-
-    unique = set(np.unique(labels).tolist())
-
-    if not unique.issubset({0, 1}):
-        raise ValueError(
-            f"labels must be 0/1, got {sorted(unique)}"
+            "labels must contain only finite values"
         )
+
+    valid_labels = (
+        (numeric_labels == 0.0)
+        | (numeric_labels == 1.0)
+    )
+
+    if not np.all(valid_labels):
+        invalid = np.unique(
+            numeric_labels[~valid_labels]
+        ).tolist()
+        raise ValueError(
+            f"labels must be exactly 0 or 1, got {invalid}"
+        )
+
+    labels = numeric_labels.astype(np.int64)
+    unique = set(np.unique(labels).tolist())
 
     if unique != {0, 1}:
         raise ValueError(

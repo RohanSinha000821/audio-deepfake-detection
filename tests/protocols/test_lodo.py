@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import pytest
@@ -134,4 +135,137 @@ def test_held_out_dataset_rejected_as_source():
     )
 
     with pytest.raises(ValueError):
+        validate_lodo_fold(fold)
+
+
+def write_manifest(path, dataset, split):
+    with path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["dataset", "split"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "dataset": dataset,
+                "split": split,
+            }
+        )
+
+
+def make_content_fold(tmp_path):
+    train = tmp_path / "train.csv"
+    dev = tmp_path / "dev.csv"
+    target = tmp_path / "target.csv"
+
+    write_manifest(train, "source", "train")
+    write_manifest(dev, "source", "dev")
+    write_manifest(target, "target", "test")
+
+    fold = LODOFold(
+        fold="TEST",
+        held_out_dataset="target",
+        source_train=(
+            ManifestRef("source", "train", str(train)),
+        ),
+        source_dev=(
+            ManifestRef("source", "dev", str(dev)),
+        ),
+        target_primary=ManifestRef(
+            "target",
+            "test",
+            str(target),
+        ),
+    )
+
+    return fold, train, dev
+
+
+def test_manifest_content_dataset_mismatch_rejected(tmp_path):
+    fold, train, _dev = make_content_fold(tmp_path)
+    write_manifest(train, "wrong", "train")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"train\.csv:2: expected dataset='source', "
+            r"split='train'; got dataset='wrong', "
+            r"split='train'"
+        ),
+    ):
+        validate_lodo_fold(
+            fold,
+            check_manifest_contents=True,
+        )
+
+
+def test_manifest_content_split_mismatch_rejected(tmp_path):
+    fold, _train, dev = make_content_fold(tmp_path)
+    write_manifest(dev, "source", "train")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"dev\.csv:2: expected dataset='source', "
+            r"split='dev'; got dataset='source', "
+            r"split='train'"
+        ),
+    ):
+        validate_lodo_fold(
+            fold,
+            check_manifest_contents=True,
+        )
+
+
+def test_source_train_dev_same_file_rejected(tmp_path):
+    shared = tmp_path / "shared.csv"
+
+    fold = LODOFold(
+        fold="TEST",
+        held_out_dataset="target",
+        source_train=(
+            ManifestRef("source", "train", str(shared)),
+        ),
+        source_dev=(
+            ManifestRef("source", "dev", str(shared)),
+        ),
+        target_primary=ManifestRef(
+            "target",
+            "test",
+            str(tmp_path / "target.csv"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="same manifest file"):
+        validate_lodo_fold(fold)
+
+
+def test_target_source_same_file_rejected(tmp_path):
+    shared = tmp_path / "shared.csv"
+
+    fold = LODOFold(
+        fold="TEST",
+        held_out_dataset="target",
+        source_train=(
+            ManifestRef("source", "train", str(shared)),
+        ),
+        source_dev=(
+            ManifestRef(
+                "source",
+                "dev",
+                str(tmp_path / "dev.csv"),
+            ),
+        ),
+        target_primary=ManifestRef(
+            "target",
+            "test",
+            str(shared),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="also used as a source"):
         validate_lodo_fold(fold)

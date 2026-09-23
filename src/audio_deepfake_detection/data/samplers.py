@@ -9,7 +9,34 @@ from torch.utils.data import Sampler
 from .datasets import ManifestDataset
 
 
-class DatasetClassBalancedSampler(Sampler[int]):
+_SEED_MASK = (1 << 63) - 1
+
+
+def _make_crop_seed(
+    seed: int,
+    epoch: int,
+    draw_position: int,
+    record_index: int,
+) -> int:
+    value = int(seed) & _SEED_MASK
+
+    for component in (
+        epoch,
+        draw_position,
+        record_index,
+    ):
+        value ^= int(component) & _SEED_MASK
+        value = (
+            value * 6364136223846793005
+            + 1442695040888963407
+        ) & _SEED_MASK
+
+    return value
+
+
+class DatasetClassBalancedSampler(
+    Sampler[tuple[int, int]]
+):
     """
     Implements the project's required sampling strategy:
 
@@ -94,7 +121,7 @@ class DatasetClassBalancedSampler(Sampler[int]):
     def __len__(self) -> int:
         return self.num_samples
 
-    def __iter__(self) -> Iterator[int]:
+    def __iter__(self) -> Iterator[tuple[int, int]]:
         generator = torch.Generator()
 
         generator.manual_seed(
@@ -103,7 +130,7 @@ class DatasetClassBalancedSampler(Sampler[int]):
 
         num_datasets = len(self.datasets)
 
-        for _ in range(self.num_samples):
+        for draw_position in range(self.num_samples):
 
             dataset_index = int(
                 torch.randint(
@@ -140,4 +167,12 @@ class DatasetClassBalancedSampler(Sampler[int]):
                 ).item()
             )
 
-            yield bucket[utterance_index]
+            record_index = bucket[utterance_index]
+            crop_seed = _make_crop_seed(
+                self.seed,
+                self.epoch,
+                draw_position,
+                record_index,
+            )
+
+            yield record_index, crop_seed

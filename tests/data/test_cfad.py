@@ -100,3 +100,30 @@ def test_cfad_unseen_parser(tmp_path):
 
     assert fake.attack_id == "F12"
     assert fake.attack_family == "partially_fake"
+
+
+def test_cfad_files_are_emitted_in_filename_order(tmp_path):
+    root = tmp_path / "extracted"
+    real_root, _fake_root = create_split(
+        root,
+        "train_clean",
+        TRAIN_REAL,
+        TRAIN_FAKE,
+    )
+
+    leaf = real_root / "aishell1"
+
+    for filename in ("c.wav", "a.wav", "b.wav"):
+        (leaf / filename).write_bytes(b"")
+
+    rows = [
+        row
+        for row in iter_split(root, "train")
+        if row.source_id == "R01"
+    ]
+
+    assert [row.utterance_id for row in rows] == [
+        "real_clean/aishell1/a",
+        "real_clean/aishell1/b",
+        "real_clean/aishell1/c",
+    ]

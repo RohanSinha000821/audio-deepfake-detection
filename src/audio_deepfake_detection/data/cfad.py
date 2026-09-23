@@ -111,13 +111,20 @@ def _iter_wav_files(path: Path) -> Iterator[Path]:
     Enumerate only immediate WAV files in one known CFAD leaf
     directory. No recursive filesystem walk is performed.
     """
+    wav_files: list[Path] = []
+
     with os.scandir(path) as entries:
         for entry in entries:
             if (
                 entry.is_file(follow_symlinks=False)
                 and entry.name.lower().endswith(".wav")
             ):
-                yield Path(entry.path)
+                wav_files.append(Path(entry.path))
+
+    yield from sorted(
+        wav_files,
+        key=lambda item: item.name,
+    )
 
 
 def _check_structure(
