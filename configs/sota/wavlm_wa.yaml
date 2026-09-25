@@ -1,0 +1,44 @@
+# Stourbe et al. (ASVspoof 2024) Weighted Average WavLM baseline.
+model_name: microsoft/wavlm-base
+revision: efa81aae7ff777e464159e0f877d54eac5b84f81
+local_files_only: true
+
+sample_rate: 16000
+# microsoft/wavlm-base preprocessor_config.json sets do_normalize=false.
+input_normalization: false
+# REPRODUCTION ASSUMPTION: Hugging Face's checkpoint enables
+# SpecAugment by default, but the anti-spoofing paper does not report it
+# as part of the fine-tuning procedure, so it is disabled here.
+apply_spec_augment: false
+train_crop_seconds: 4.0
+
+# REPRODUCTION ASSUMPTION: the paper does not state whether its 13
+# learned scalars are normalized. Softmax matches the official
+# Transformers weighted-layer-sum implementation.
+layer_weight_normalization: softmax
+
+class_weights:
+  - 9.0  # bona fide (label/logit 0)
+  - 1.0  # spoof (label/logit 1)
+
+encoder_lr: 2.0e-5
+backend_lr: 5.0e-3
+lr_gamma: 0.95
+
+# REPRODUCTION ASSUMPTIONS REQUIRED BEFORE A FINAL PAPER-FAITHFUL RUN.
+# The paper mentions both mechanisms but does not report coefficients.
+layerwise_lr_decay: null
+initial_weight_l2_lambda: null
+
+# Initial H200 operating point, not a paper-reported batch setting.
+batch_size: 8
+eval_batch_size: 1
+gradient_accumulation_steps: 4
+
+max_epochs: 100
+early_stopping_patience: 5
+
+num_workers: 4
+num_samples: null
+seed: 1234
+bf16: true
