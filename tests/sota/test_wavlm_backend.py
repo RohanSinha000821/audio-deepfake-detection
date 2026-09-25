@@ -1,4 +1,6 @@
 import inspect
+import json
+import math
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from audio_deepfake_detection.sota.wavlm_backend.training import (
     EarlyStoppingState,
     create_weighted_cross_entropy,
     save_checkpoint,
+    train_one_epoch,
 )
 
 
@@ -139,6 +142,79 @@ def test_spoof_score_increases_with_spoof_logit():
     higher = spoof_score(torch.tensor([[0.5, 1.6]]))
 
     assert higher.item() > lower.item()
+
+
+def test_train_one_epoch_reports_progress_and_summary(capsys):
+    class TinyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.wavlm = torch.nn.Linear(2, 2)
+            self.backend = torch.nn.Linear(2, 2)
+
+        def forward(self, waveform, attention_mask):
+            del attention_mask
+            return self.backend(torch.tanh(self.wavlm(waveform)))
+
+    model = TinyModel()
+    optimizer = torch.optim.Adam(
+        [
+            {
+                "params": model.wavlm.parameters(),
+                "lr": 2.0e-5,
+                "name": "wavlm",
+            },
+            {
+                "params": model.backend.parameters(),
+                "lr": 5.0e-3,
+                "name": "wa_backend",
+            },
+        ]
+    )
+    loader = [
+        {
+            "waveform": torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            "attention_mask": torch.ones(2, 2, dtype=torch.bool),
+            "label": torch.tensor([0, 1]),
+        },
+        {
+            "waveform": torch.tensor([[0.5, 0.5], [1.0, 1.0]]),
+            "attention_mask": torch.ones(2, 2, dtype=torch.bool),
+            "label": torch.tensor([1, 0]),
+        },
+    ]
+
+    mean_loss = train_one_epoch(
+        model,
+        loader,
+        torch.nn.CrossEntropyLoss(),
+        optimizer,
+        device=torch.device("cpu"),
+        epoch=7,
+        gradient_accumulation_steps=3,
+        progress_interval=1,
+    )
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+    ]
+
+    assert math.isfinite(mean_loss)
+    assert [record["event"] for record in records] == [
+        "train_progress",
+        "train_progress",
+        "train_epoch_summary",
+    ]
+    assert records[0]["epoch"] == 7
+    assert records[0]["batch"] == 1
+    assert records[0]["total_batches"] == 2
+    assert records[0]["examples"] == 2
+    assert records[0]["wavlm_lr"] == pytest.approx(2.0e-5)
+    assert records[0]["backend_lr"] == pytest.approx(5.0e-3)
+    assert records[1]["percent_complete"] == pytest.approx(100.0)
+    assert records[1]["eta_seconds"] == pytest.approx(0.0)
+    assert records[2]["batches"] == 2
+    assert records[2]["examples"] == 4
+    assert records[2]["mean_loss"] == pytest.approx(mean_loss)
 
 
 def test_checkpoint_metadata_distinguishes_best_and_last(tmp_path):

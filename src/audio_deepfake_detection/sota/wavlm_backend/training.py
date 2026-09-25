@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
+import time
 
 import torch
 from torch import nn
@@ -124,21 +126,28 @@ def train_one_epoch(
     optimizer: Optimizer,
     *,
     device: torch.device,
+    epoch: int,
     gradient_accumulation_steps: int = 1,
     bf16: bool = False,
+    progress_interval: int = 100,
 ) -> float:
     if gradient_accumulation_steps <= 0:
         raise ValueError(
             "gradient_accumulation_steps must be positive"
         )
 
+    if progress_interval <= 0:
+        raise ValueError("progress_interval must be positive")
+
     model.train()
     optimizer.zero_grad(set_to_none=True)
 
     total_loss = 0.0
     total_examples = 0
+    batches_processed = 0
     num_batches = len(loader)
     autocast_enabled = bf16 and device.type == "cuda"
+    training_start = time.perf_counter()
 
     for batch_index, batch in enumerate(loader):
         waveform = batch["waveform"].to(
@@ -183,11 +192,81 @@ def train_one_epoch(
         batch_size = int(labels.shape[0])
         total_loss += float(loss.detach()) * batch_size
         total_examples += batch_size
+        batches_processed = batch_index + 1
+
+        if batches_processed % progress_interval == 0:
+            elapsed = time.perf_counter() - training_start
+            batches_per_second = batches_processed / elapsed
+            examples_per_second = total_examples / elapsed
+            remaining_batches = num_batches - batches_processed
+            eta_seconds = remaining_batches / batches_per_second
+            wavlm_lrs = [
+                float(group["lr"])
+                for group in optimizer.param_groups
+                if str(group.get("name", "")).startswith("wavlm")
+            ]
+            backend_lrs = [
+                float(group["lr"])
+                for group in optimizer.param_groups
+                if group.get("name") == "wa_backend"
+            ]
+
+            if not wavlm_lrs or len(backend_lrs) != 1:
+                raise RuntimeError(
+                    "Expected named WavLM and WA backend optimizer groups"
+                )
+
+            print(
+                json.dumps(
+                    {
+                        "event": "train_progress",
+                        "epoch": int(epoch),
+                        "batch": batches_processed,
+                        "total_batches": num_batches,
+                        "percent_complete": (
+                            100.0 * batches_processed / num_batches
+                        ),
+                        "examples": total_examples,
+                        "mean_loss": total_loss / total_examples,
+                        "elapsed_seconds": elapsed,
+                        "batches_per_second": batches_per_second,
+                        "examples_per_second": examples_per_second,
+                        "eta_seconds": eta_seconds,
+                        "wavlm_lr": max(wavlm_lrs),
+                        "backend_lr": backend_lrs[0],
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
 
     if total_examples == 0:
         raise ValueError("Training loader produced no examples")
 
-    return total_loss / total_examples
+    training_elapsed = time.perf_counter() - training_start
+    mean_loss = total_loss / total_examples
+    print(
+        json.dumps(
+            {
+                "event": "train_epoch_summary",
+                "epoch": int(epoch),
+                "batches": batches_processed,
+                "examples": total_examples,
+                "mean_loss": mean_loss,
+                "elapsed_seconds": training_elapsed,
+                "batches_per_second": (
+                    batches_processed / training_elapsed
+                ),
+                "examples_per_second": (
+                    total_examples / training_elapsed
+                ),
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+    return mean_loss
 
 
 @torch.no_grad()

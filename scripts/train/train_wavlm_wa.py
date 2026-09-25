@@ -225,6 +225,7 @@ def main() -> None:
             loss_function,
             optimizer,
             device=device,
+            epoch=epoch,
             gradient_accumulation_steps=int(
                 config["gradient_accumulation_steps"]
             ),
