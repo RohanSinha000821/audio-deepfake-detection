@@ -20,6 +20,8 @@ from audio_deepfake_detection.sota.wavlm_backend.training import (
     EarlyStoppingState,
     create_weighted_cross_entropy,
     save_checkpoint,
+    score_loader,
+    score_loader_with_metadata,
     train_one_epoch,
 )
 
@@ -215,6 +217,92 @@ def test_train_one_epoch_reports_progress_and_summary(capsys):
     assert records[2]["batches"] == 2
     assert records[2]["examples"] == 4
     assert records[2]["mean_loss"] == pytest.approx(mean_loss)
+
+
+def test_scoring_api_metadata_alignment_and_inference_mode(capsys):
+    class TinyScoreModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.inference_mode_observations = []
+
+        def score(self, waveform, attention_mask):
+            del attention_mask
+            self.inference_mode_observations.append(
+                (torch.is_grad_enabled(), torch.is_inference_mode_enabled())
+            )
+            return waveform[:, 0]
+
+    class TinyLoader:
+        dataset = range(3)
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            yield {
+                "waveform": torch.tensor([[0.1, 0.0], [0.9, 0.0]]),
+                "attention_mask": torch.ones(2, 2, dtype=torch.bool),
+                "label": torch.tensor([0, 1]),
+                "utterance_id": ["utt-a", "utt-b"],
+                "dataset": ["source-a", "source-a"],
+                "split": ["dev", "dev"],
+            }
+            yield {
+                "waveform": torch.tensor([[0.6, 0.0]]),
+                "attention_mask": torch.ones(1, 2, dtype=torch.bool),
+                "label": torch.tensor([1]),
+                "utterance_id": ["utt-c"],
+                "dataset": ["source-a"],
+                "split": ["dev"],
+            }
+
+    model = TinyScoreModel()
+    loader = TinyLoader()
+    labels, scores = score_loader(
+        model,
+        loader,
+        device=torch.device("cpu"),
+    )
+
+    assert labels == [0, 1, 1]
+    assert scores == pytest.approx([0.1, 0.9, 0.6])
+
+    metadata_labels, metadata_scores, records = (
+        score_loader_with_metadata(
+            model,
+            loader,
+            device=torch.device("cpu"),
+            partition="source_dev:source-a:dev",
+            progress_interval=1,
+        )
+    )
+
+    assert metadata_labels == labels
+    assert metadata_scores == pytest.approx(scores)
+    assert [record["label"] for record in records] == labels
+    assert [record["score"] for record in records] == pytest.approx(scores)
+    assert [record["utterance_id"] for record in records] == [
+        "utt-a",
+        "utt-b",
+        "utt-c",
+    ]
+    assert {record["dataset"] for record in records} == {"source-a"}
+    assert {record["split"] for record in records} == {"dev"}
+    assert all(
+        not grad_enabled and inference_enabled
+        for grad_enabled, inference_enabled
+        in model.inference_mode_observations
+    )
+    messages = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+    ]
+    assert [message["event"] for message in messages] == [
+        "eval_progress",
+        "eval_progress",
+        "eval_partition_summary",
+    ]
+    assert messages[-1]["examples"] == 3
 
 
 def test_checkpoint_metadata_distinguishes_best_and_last(tmp_path):

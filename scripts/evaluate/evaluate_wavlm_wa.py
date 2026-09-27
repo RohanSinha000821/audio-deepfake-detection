@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
+import tempfile
 
 import torch
 import yaml
@@ -21,7 +23,7 @@ from audio_deepfake_detection.protocols.lodo import load_lodo_config
 from audio_deepfake_detection.sota.wavlm_backend.model import WavLMWA
 from audio_deepfake_detection.sota.wavlm_backend.training import (
     load_checkpoint,
-    score_loader,
+    score_loader_with_metadata,
 )
 
 
@@ -68,6 +70,158 @@ def make_eval_loader(ref, config: dict) -> DataLoader:
     )
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _write_score_tsv(
+    path: Path,
+    records: list[dict[str, str | int | float]],
+) -> None:
+    rows = ["utterance_id	dataset	split	label	score"]
+    rows.extend(
+        "	".join(
+            (
+                str(record["utterance_id"]),
+                str(record["dataset"]),
+                str(record["split"]),
+                str(record["label"]),
+                repr(float(record["score"])),
+            )
+        )
+        for record in records
+    )
+    _atomic_write_text(path, "\n".join(rows) + "\n")
+
+
+def _artifact_name(role: str, ref) -> str:
+    return f"{role}_{ref.dataset}_{ref.split}.tsv"
+
+
+def evaluate_checkpoint(
+    *,
+    model: WavLMWA,
+    fold,
+    config: dict,
+    checkpoint_path: Path,
+    checkpoint_epoch: int,
+    artifact_dir: Path,
+    device: torch.device,
+    bf16: bool,
+) -> dict:
+    scores_dir = artifact_dir / "scores"
+    source_report: dict[str, dict] = {}
+    source_score_files: dict[str, str] = {}
+    pooled_labels: list[int] = []
+    pooled_scores: list[float] = []
+
+    # Source development is scored and calibration is frozen and persisted
+    # before any target dataset is constructed or read.
+    for ref in fold.source_dev:
+        partition = f"source_dev:{ref.dataset}:{ref.split}"
+        labels, scores, records = score_loader_with_metadata(
+            model,
+            make_eval_loader(ref, config),
+            device=device,
+            bf16=bf16,
+            partition=partition,
+        )
+        score_path = scores_dir / _artifact_name("source_dev", ref)
+        _write_score_tsv(score_path, records)
+        source_score_files[f"{ref.dataset}:{ref.split}"] = str(score_path)
+        source_report[ref.dataset] = evaluate_scores(labels, scores)
+        pooled_labels.extend(labels)
+        pooled_scores.extend(scores)
+
+    operating_points = select_source_operating_points(
+        pooled_labels,
+        pooled_scores,
+    )
+    thresholds_path = artifact_dir / "thresholds.json"
+    thresholds_report = {
+        "fold": fold.fold,
+        "checkpoint": str(checkpoint_path),
+        "checkpoint_epoch": int(checkpoint_epoch),
+        "source_apcer_thresholds": {
+            str(target): asdict(selection)
+            for target, selection in operating_points.items()
+        },
+    }
+    _atomic_write_text(
+        thresholds_path,
+        json.dumps(thresholds_report, indent=2, sort_keys=True) + "\n",
+    )
+
+    target_refs = [fold.target_primary]
+
+    if fold.target_secondary is not None:
+        target_refs.append(fold.target_secondary)
+
+    target_report: dict[str, dict] = {}
+    target_score_files: dict[str, str] = {}
+
+    for ref in target_refs:
+        key = f"{ref.dataset}:{ref.split}"
+        labels, scores, records = score_loader_with_metadata(
+            model,
+            make_eval_loader(ref, config),
+            device=device,
+            bf16=bf16,
+            partition=f"target:{key}",
+        )
+        score_path = scores_dir / _artifact_name("target", ref)
+        _write_score_tsv(score_path, records)
+        target_score_files[key] = str(score_path)
+        target_report[key] = evaluate_scores(
+            labels,
+            scores,
+            transferred_thresholds=operating_points,
+        )
+
+    return {
+        "fold": fold.fold,
+        "checkpoint": str(checkpoint_path),
+        "checkpoint_epoch": int(checkpoint_epoch),
+        "source_dev": source_report,
+        "source_dev_macro_eer": sum(
+            float(metrics["eer"])
+            for metrics in source_report.values()
+        ) / len(source_report),
+        "source_pooled_apcer_thresholds": {
+            str(target): asdict(selection)
+            for target, selection in operating_points.items()
+        },
+        "targets": target_report,
+        "score_files": {
+            "source_dev": source_score_files,
+            "targets": target_score_files,
+        },
+        "thresholds_file": str(thresholds_path),
+    }
+
+
 def main() -> None:
     args = parse_args()
     config = yaml.safe_load(
@@ -106,71 +260,23 @@ def main() -> None:
         expected_config=config,
         expected_checkpoint_role="best",
     )
-
-    source_report: dict[str, dict] = {}
-    pooled_labels: list[int] = []
-    pooled_scores: list[float] = []
-
-    # Source development is scored and calibration is frozen before
-    # any target dataset is constructed or read.
-    for ref in fold.source_dev:
-        labels, scores = score_loader(
-            model,
-            make_eval_loader(ref, config),
-            device=device,
-            bf16=bf16,
-        )
-        source_report[ref.dataset] = evaluate_scores(labels, scores)
-        pooled_labels.extend(labels)
-        pooled_scores.extend(scores)
-
-    operating_points = select_source_operating_points(
-        pooled_labels,
-        pooled_scores,
+    artifact_dir = (
+        args.output.parent if args.output is not None else Path.cwd()
     )
-
-    target_refs = [fold.target_primary]
-
-    if fold.target_secondary is not None:
-        target_refs.append(fold.target_secondary)
-
-    target_report: dict[str, dict] = {}
-
-    for ref in target_refs:
-        labels, scores = score_loader(
-            model,
-            make_eval_loader(ref, config),
-            device=device,
-            bf16=bf16,
-        )
-        target_report[
-            f"{ref.dataset}:{ref.split}"
-        ] = evaluate_scores(
-            labels,
-            scores,
-            transferred_thresholds=operating_points,
-        )
-
-    report = {
-        "fold": fold.fold,
-        "checkpoint": str(args.checkpoint),
-        "checkpoint_epoch": int(checkpoint["epoch"]),
-        "source_dev": source_report,
-        "source_dev_macro_eer": sum(
-            float(metrics["eer"])
-            for metrics in source_report.values()
-        ) / len(source_report),
-        "source_pooled_apcer_thresholds": {
-            str(target): asdict(selection)
-            for target, selection in operating_points.items()
-        },
-        "targets": target_report,
-    }
+    report = evaluate_checkpoint(
+        model=model,
+        fold=fold,
+        config=config,
+        checkpoint_path=args.checkpoint,
+        checkpoint_epoch=int(checkpoint["epoch"]),
+        artifact_dir=artifact_dir,
+        device=device,
+        bf16=bf16,
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True)
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(rendered + "\n", encoding="utf-8")
+        _atomic_write_text(args.output, rendered + "\n")
 
     print(rendered)
 

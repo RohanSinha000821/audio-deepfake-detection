@@ -269,21 +269,34 @@ def train_one_epoch(
     return mean_loss
 
 
-@torch.no_grad()
-def score_loader(
+@torch.inference_mode()
+def _score_loader(
     model: WavLMWA,
     loader: DataLoader,
     *,
     device: torch.device,
-    bf16: bool = False,
-) -> tuple[list[int], list[float]]:
-    model.eval()
+    bf16: bool,
+    include_metadata: bool,
+    partition: str | None,
+    progress_interval: int,
+) -> tuple[
+    list[int],
+    list[float],
+    list[dict[str, str | int | float]],
+]:
+    if progress_interval <= 0:
+        raise ValueError("progress_interval must be positive")
 
+    model.eval()
     labels: list[int] = []
     scores: list[float] = []
+    records: list[dict[str, str | int | float]] = []
     autocast_enabled = bf16 and device.type == "cuda"
+    total_batches = len(loader)
+    total_examples = len(loader.dataset)
+    scoring_start = time.perf_counter()
 
-    for batch in loader:
+    for batch_index, batch in enumerate(loader):
         waveform = batch["waveform"].to(
             device,
             non_blocking=True,
@@ -303,16 +316,148 @@ def score_loader(
                 attention_mask,
             )
 
-        labels.extend(int(value) for value in batch["label"].tolist())
-        scores.extend(
+        batch_labels = [
+            int(value) for value in batch["label"].tolist()
+        ]
+        batch_score_values = [
             float(value)
             for value in batch_scores.float().cpu().tolist()
-        )
+        ]
+
+        if len(batch_labels) != len(batch_score_values):
+            raise RuntimeError("Evaluation labels and scores are misaligned")
+
+        labels.extend(batch_labels)
+        scores.extend(batch_score_values)
+
+        if include_metadata:
+            metadata_fields = ("utterance_id", "dataset", "split")
+
+            for field in metadata_fields:
+                if (
+                    field not in batch
+                    or len(batch[field]) != len(batch_labels)
+                ):
+                    raise ValueError(
+                        f"Evaluation batch has invalid {field!r} metadata"
+                    )
+
+            records.extend(
+                {
+                    "utterance_id": str(batch["utterance_id"][index]),
+                    "dataset": str(batch["dataset"][index]),
+                    "split": str(batch["split"][index]),
+                    "label": label,
+                    "score": score,
+                }
+                for index, (label, score) in enumerate(
+                    zip(batch_labels, batch_score_values, strict=True)
+                )
+            )
+
+        batches_completed = batch_index + 1
+        examples_completed = len(labels)
+
+        if partition is not None and (
+            batches_completed % progress_interval == 0
+        ):
+            elapsed = time.perf_counter() - scoring_start
+            examples_per_second = examples_completed / elapsed
+            remaining_examples = total_examples - examples_completed
+            print(
+                json.dumps(
+                    {
+                        "event": "eval_progress",
+                        "partition": partition,
+                        "batch": batches_completed,
+                        "total_batches": total_batches,
+                        "examples_completed": examples_completed,
+                        "total_examples": total_examples,
+                        "percent_complete": (
+                            100.0 * examples_completed / total_examples
+                        ),
+                        "elapsed_seconds": elapsed,
+                        "examples_per_second": examples_per_second,
+                        "eta_seconds": (
+                            remaining_examples / examples_per_second
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
 
     if not labels:
         raise ValueError("Evaluation loader produced no examples")
 
+    if include_metadata and len(records) != len(labels):
+        raise RuntimeError("Evaluation metadata and scores are misaligned")
+
+    if partition is not None:
+        elapsed = time.perf_counter() - scoring_start
+        print(
+            json.dumps(
+                {
+                    "event": "eval_partition_summary",
+                    "partition": partition,
+                    "batches": total_batches,
+                    "examples": len(labels),
+                    "elapsed_seconds": elapsed,
+                    "examples_per_second": len(labels) / elapsed,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    return labels, scores, records
+
+
+@torch.inference_mode()
+def score_loader(
+    model: WavLMWA,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    bf16: bool = False,
+) -> tuple[list[int], list[float]]:
+    labels, scores, _records = _score_loader(
+        model,
+        loader,
+        device=device,
+        bf16=bf16,
+        include_metadata=False,
+        partition=None,
+        progress_interval=1000,
+    )
+
     return labels, scores
+
+
+@torch.inference_mode()
+def score_loader_with_metadata(
+    model: WavLMWA,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    bf16: bool = False,
+    partition: str,
+    progress_interval: int = 1000,
+) -> tuple[
+    list[int],
+    list[float],
+    list[dict[str, str | int | float]],
+]:
+    """Score one ordered partition and retain aligned manifest metadata."""
+    return _score_loader(
+        model,
+        loader,
+        device=device,
+        bf16=bf16,
+        include_metadata=True,
+        partition=partition,
+        progress_interval=progress_interval,
+    )
 
 
 def score_source_dev_domains(
